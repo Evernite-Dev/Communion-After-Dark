@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.communionafterdark.CadPlayer</id>
+  <name>Communion After Dark Player</name>
+  <summary>Personal archive player for Communion After Dark episodes</summary>
+  <description>
+    <p>
+      Browse and play your locally archived Communion After Dark episodes.
+      View tracklists, episode artwork, and show descriptions.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.communionafterdark.CadPlayer.desktop</launchable>
+  <url type="homepage">https://www.communionafterdark.com</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <content_rating type="oars-1.1"/>
+</component>

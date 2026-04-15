@@ -1,0 +1,21 @@
+# Ensure Python and text files always use LF line endings in the repo,
+# regardless of which OS checks them out.
+* text=auto
+
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.json      text eol=lf
+*.xml       text eol=lf
+*.desktop   text eol=lf
+*.sh        text eol=lf
+
+# Binaries — no line-ending conversion
+*.mp3       binary
+*.jpg       binary
+*.jpeg      binary
+*.png       binary
+*.webp      binary
+*.db        binary

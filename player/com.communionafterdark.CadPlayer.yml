@@ -1,0 +1,45 @@
+app-id: com.communionafterdark.CadPlayer
+runtime: org.gnome.Platform
+runtime-version: '46'
+sdk: org.gnome.Sdk
+command: cad-player
+
+finish-args:
+  # Display
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # Audio output
+  - --socket=pulseaudio
+  # File system — read the archive directory
+  # The user should override this with the actual archive path via a portal
+  - --filesystem=home:ro
+  # DBus for media keys / MPRIS
+  - --talk-name=org.mpris.MediaPlayer2.cad-player
+  - --own-name=org.mpris.MediaPlayer2.cad-player
+  # GStreamer needs access to GPU for vaapi (optional, harmless if absent)
+  - --device=dri
+
+modules:
+  # ── Python 3 GStreamer bindings ──────────────────────────────────────────
+  - name: gst-python
+    buildsystem: meson
+    config-opts:
+      - -Dpython=python3
+    sources:
+      - type: archive
+        url: https://gstreamer.freedesktop.org/src/gst-python/gst-python-1.24.0.tar.xz
+        sha256: placeholder-update-before-use
+
+  # ── The player application ───────────────────────────────────────────────
+  - name: cad-player
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --find-links=. --prefix=/app .
+    sources:
+      - type: dir
+        path: .
+
+    # Python dependencies (pre-downloaded wheels bundled in the source archive
+    # for an offline Flatpak build; replace sha256 values with actual hashes)
+    # For development builds you can build without these and rely on the SDK.

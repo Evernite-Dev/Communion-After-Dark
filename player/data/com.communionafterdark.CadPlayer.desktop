@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Communion After Dark
+GenericName=Podcast Player
+Comment=Play your Communion After Dark archive
+Exec=cad-player
+Icon=com.communionafterdark.CadPlayer
+Type=Application
+Categories=Audio;Music;Player;
+Keywords=podcast;music;electronic;EBM;industrial;gothic;
+StartupNotify=true

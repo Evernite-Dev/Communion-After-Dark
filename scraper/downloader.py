@@ -18,6 +18,7 @@ import logging
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -83,7 +84,16 @@ def write_metadata_json(ep_dir: Path, episode_id: int, row: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 def _ytdlp_available() -> bool:
-    return shutil.which("yt-dlp") is not None
+    # Check as a module first (picks up venv deps like curl_cffi),
+    # fall back to checking for the standalone executable.
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "yt_dlp", "--version"],
+            capture_output=True, check=True,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return shutil.which("yt-dlp") is not None
 
 
 def _download_with_ytdlp(url: str, dest: Path) -> None:
@@ -99,7 +109,7 @@ def _download_with_ytdlp(url: str, dest: Path) -> None:
     # Write to a temp path; yt-dlp may append .mp3 if the format conversion runs
     tmp = dest.with_suffix(".ytdlp.tmp")
     cmd = [
-        "yt-dlp",
+        sys.executable, "-m", "yt_dlp",  # run via venv Python so curl_cffi is visible
         "--extract-audio",
         "--audio-format", "mp3",
         "--audio-quality", "0",

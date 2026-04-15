@@ -74,7 +74,7 @@ def write_metadata_json(ep_dir: Path, episode_id: int, row: dict) -> Path:
     }
     dest = ep_dir / "metadata.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    dest.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return dest
 
 

@@ -16,6 +16,8 @@ File layout per episode:
 import json
 import logging
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -77,6 +79,51 @@ def write_metadata_json(ep_dir: Path, episode_id: int, row: dict) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# yt-dlp helper (Mixcloud and other streaming sources)
+# ---------------------------------------------------------------------------
+
+def _ytdlp_available() -> bool:
+    return shutil.which("yt-dlp") is not None
+
+
+def _download_with_ytdlp(url: str, dest: Path) -> None:
+    """
+    Download audio from a streaming URL (e.g. Mixcloud) via yt-dlp.
+    Saves as MP3 to dest.  Raises RuntimeError on failure.
+    """
+    if not _ytdlp_available():
+        raise RuntimeError(
+            "yt-dlp is not installed. Install it with: pip install yt-dlp"
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Write to a temp path; yt-dlp may append .mp3 if the format conversion runs
+    tmp = dest.with_suffix(".ytdlp.tmp")
+    cmd = [
+        "yt-dlp",
+        "--extract-audio",
+        "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "--no-playlist",
+        "--no-progress",
+        "-o", str(tmp),
+        url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"yt-dlp failed:\n{result.stderr[-600:]}")
+    # yt-dlp appends the extension after conversion; check both names
+    if tmp.exists():
+        tmp.rename(dest)
+    else:
+        mp3_tmp = tmp.with_name(tmp.name + ".mp3")
+        if mp3_tmp.exists():
+            mp3_tmp.rename(dest)
+        else:
+            raise RuntimeError(f"yt-dlp succeeded but output not found near {tmp}")
+
+
+# ---------------------------------------------------------------------------
 # Audio download
 # ---------------------------------------------------------------------------
 
@@ -89,11 +136,15 @@ def download_audio_batch(batch_size: int = BATCH_SIZE) -> int:
 
     success = 0
     for i, row in enumerate(pending, start=1):
-        ep_id   = row["id"]
-        url     = row["audio_url"]
-        title   = row["title"] or f"episode-{ep_id}"
-        year    = row["year"]
-        pub_date= row["pub_date"]
+        ep_id    = row["id"]
+        url      = row["audio_url"]
+        title    = row["title"] or f"episode-{ep_id}"
+        year     = row["year"]
+        pub_date = row["pub_date"]
+        # Determine source: stored column, or infer from URL
+        source   = row["audio_source"] if "audio_source" in row.keys() else None
+        if not source:
+            source = "mixcloud" if "mixcloud.com" in url else "direct"
 
         ep_dir = episode_dir(year, pub_date, title)
         dest   = ep_dir / "audio.mp3"
@@ -104,11 +155,14 @@ def download_audio_batch(batch_size: int = BATCH_SIZE) -> int:
             success += 1
             continue
 
+        log.info("Downloading ep#%d [%s]: %s", ep_id, source, url[:70])
         try:
-            download_file(url, dest)
+            if source == "mixcloud":
+                _download_with_ytdlp(url, dest)
+            else:
+                download_file(url, dest)
             rel = str(dest.relative_to(ARCHIVE_DIR.parent))
             db.set_audio_done(ep_id, rel)
-            # Also write/update metadata.json now that we have a local dir
             _write_meta_if_needed(ep_dir, ep_id, row)
             success += 1
         except Exception as exc:

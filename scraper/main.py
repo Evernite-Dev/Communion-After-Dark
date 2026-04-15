@@ -168,6 +168,21 @@ def cmd_refresh_metadata(_args) -> None:
     console.print(f"  Written: {n} files")
 
 
+def cmd_refresh_audio(args) -> None:
+    db.init_db()
+    batch = args.batch or 50
+    console.print(
+        f"[bold]Refreshing audio URLs for up to {batch} no-audio episodes…[/bold]"
+    )
+    found, checked = extractor.run_audio_refresh_batch(batch_size=batch)
+    console.print(f"  Checked: {checked}  Found audio: [green]{found}[/green]")
+    if found:
+        console.print(
+            "[yellow]Run 'download --audio' to fetch the newly discovered files.[/yellow]"
+        )
+    cmd_status(args)
+
+
 def cmd_run(args) -> None:
     """
     Full pipeline: discover (RSS) → scrape → download → tag.
@@ -252,6 +267,17 @@ def build_parser() -> argparse.ArgumentParser:
     # refresh-metadata
     rm = sub.add_parser("refresh-metadata", help="Re-write all metadata.json files")
     rm.set_defaults(func=cmd_refresh_metadata)
+
+    # refresh-audio
+    ra = sub.add_parser(
+        "refresh-audio",
+        help="Re-scan no-audio episodes for Buzzsprout, direct MP3, and Mixcloud sources",
+    )
+    ra.add_argument(
+        "--batch", type=int,
+        help="Episodes per batch (default 50)",
+    )
+    ra.set_defaults(func=cmd_refresh_audio)
 
     # run (full pipeline)
     r = sub.add_parser("run", help="Full pipeline: discover → scrape → download → tag")

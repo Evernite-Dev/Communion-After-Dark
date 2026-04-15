@@ -5,22 +5,27 @@ For each episode URL already in the DB, fetches the Squarespace page and
 extracts:
   - title, publication date
   - episode artwork URL
-  - Buzzsprout direct-download audio URL
+  - Audio URL (Buzzsprout direct MP3, self-hosted direct MP3, or Mixcloud page)
   - full tracklist (position, timestamp, artist, title, album, label, country)
 
-The HTML structure of the CAD Squarespace site (as observed):
-  - Artwork:  <img> inside a featured-image block or Open Graph <meta>
-  - Audio:    a Buzzsprout direct link ending in .mp3 or ?download=true
-  - Tracklist: plain text / formatted text in the page body with lines like:
-        00:25 - Artist - Song - Album - Label - Country
-    Some older episodes may use different separators or different fields.
+Audio source detection order:
+  1. Buzzsprout MP3 link (2021-present)
+  2. Direct MP3 href in page body via ?format=json-pretty API (2011-2015)
+     Hosted on: cad.tieranny.com, communionafterdark.com, static1.squarespace.com
+  3. Mixcloud embed iframe (2016-2023)
+  4. <audio> tag fallback
+
+The Squarespace ?format=json-pretty endpoint returns the full post body HTML
+including media embeds that are JavaScript-rendered in the browser and therefore
+invisible to a plain page scrape.
 """
 
 import json
 import logging
 import re
+import time
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -28,13 +33,11 @@ import database as db
 from config import BASE_URL, BATCH_SIZE, DELAY_BETWEEN_BATCHES
 from http_client import get
 
-import time
-
 log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Buzzsprout audio URL extraction
+# Audio URL extraction — multiple hosting providers
 # ---------------------------------------------------------------------------
 
 _BUZZSPROUT_RE = re.compile(
@@ -42,37 +45,98 @@ _BUZZSPROUT_RE = re.compile(
     re.IGNORECASE,
 )
 
-def _extract_audio_url(soup: BeautifulSoup, page_text: str) -> tuple[str | None, int | None]:
+# Any direct MP3 link (self-hosted on tieranny.com, communionafterdark.com,
+# static1.squarespace.com, etc.)
+_DIRECT_MP3_RE = re.compile(
+    r'https?://[^\s"\'<>]+\.mp3(?:[^\s"\'<>]*)?',
+    re.IGNORECASE,
+)
+
+# Mixcloud widget iframe: feed= param holds the URL-encoded Mixcloud track URL
+_MIXCLOUD_WIDGET_RE = re.compile(
+    r'mixcloud\.com/widget/iframe/[^"\'<>\s]*feed=([^&"\'<>\s]+)',
+    re.IGNORECASE,
+)
+
+
+def _extract_mixcloud_url(text: str) -> str | None:
+    """Extract a clean Mixcloud track URL from a widget iframe embed."""
+    m = _MIXCLOUD_WIDGET_RE.search(text)
+    if m:
+        decoded = unquote(m.group(1))
+        # Ensure it's a proper Mixcloud track URL
+        if "mixcloud.com" in decoded:
+            return decoded.rstrip("/") + "/"
+    return None
+
+
+def _fetch_json_body(page_url: str) -> str:
     """
-    Returns (direct_mp3_url, buzzsprout_episode_id) or (None, None).
+    Fetch the Squarespace ?format=json-pretty endpoint.
+    Returns the post body HTML string (may be empty on failure).
+
+    This endpoint exposes the full rendered body including audio embeds that
+    are JavaScript-rendered and invisible in the static page HTML.
+    """
+    try:
+        resp = get(page_url + "?format=json-pretty")
+        data = resp.json()
+        return data.get("item", {}).get("body", "") or ""
+    except Exception as exc:
+        log.debug("JSON body fetch failed for %s: %s", page_url, exc)
+        return ""
+
+
+def _extract_audio_url(
+    soup: BeautifulSoup, page_text: str, body_html: str = ""
+) -> tuple[str | None, int | None, str | None]:
+    """
+    Returns (audio_url, buzzsprout_episode_id, source) or (None, None, None).
+
+    source is one of: 'buzzsprout' | 'direct' | 'mixcloud'
 
     Search order:
-      1. <a href="...buzzsprout...mp3..."> tags (download links)
-      2. Raw text search for Buzzsprout MP3 URLs
-      3. <audio src="..."> elements
+      1. Buzzsprout MP3 — anchor tags, then raw text
+      2. Direct MP3 in JSON body HTML (self-hosted: tieranny, sqsp CDN, cad.com)
+      3. Mixcloud widget embed (in body HTML or page text)
+      4. <audio src="..."> element
     """
-    # 1. Anchor tags
+    combined = body_html + "\n" + page_text
+
+    # 1. Buzzsprout anchor tags
     for a in soup.find_all("a", href=True):
         href: str = a["href"]
         m = _BUZZSPROUT_RE.search(href)
         if m:
-            url = href.split("?")[0]  # strip ?download=true etc.
-            return url, int(m.group(1))
+            url = href.split("?")[0]
+            return url, int(m.group(1)), "buzzsprout"
 
-    # 2. Raw text search
-    m = _BUZZSPROUT_RE.search(page_text)
+    # 2. Buzzsprout anywhere in combined text
+    m = _BUZZSPROUT_RE.search(combined)
     if m:
         url = m.group(0).split("?")[0]
-        return url, int(m.group(1))
+        return url, int(m.group(1)), "buzzsprout"
 
-    # 3. <audio> element
+    # 3. Direct MP3 in JSON body (self-hosted archives)
+    if body_html:
+        m = _DIRECT_MP3_RE.search(body_html)
+        if m:
+            url = m.group(0).split("?")[0]
+            return url, None, "direct"
+
+    # 4. Mixcloud embed
+    mixcloud_url = _extract_mixcloud_url(combined)
+    if mixcloud_url:
+        return mixcloud_url, None, "mixcloud"
+
+    # 5. <audio> element fallback
     audio = soup.find("audio")
     if audio:
         src = audio.get("src") or (audio.find("source") or {}).get("src")
         if src:
-            return src, None
+            return src, None, "direct"
 
-    return None, None
+    return None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -312,16 +376,24 @@ def scrape_episode(episode_id: int, page_url: str) -> bool:
 
     soup = BeautifulSoup(resp.text, "lxml")
 
+    # Fetch the Squarespace JSON body — exposes audio links hidden behind JS
+    body_html = _fetch_json_body(page_url)
+
+    # Use JSON body for tracklist too — it's the rendered content
+    body_soup = BeautifulSoup(body_html, "lxml") if body_html else soup
+
     title = _extract_title(soup)
     pub_date = _extract_pub_date(soup)
     description = _extract_description(soup)
     artwork_url = _extract_artwork_url(soup)
-    audio_url, buzzsprout_id = _extract_audio_url(soup, resp.text)
-    tracks = _extract_tracklist(soup)
+    audio_url, buzzsprout_id, audio_source = _extract_audio_url(soup, resp.text, body_html)
+    tracks = _extract_tracklist(body_soup)
 
     log.info(
-        "  title=%r  date=%s  tracks=%d  audio=%s",
-        title, pub_date, len(tracks), "yes" if audio_url else "NO",
+        "  title=%r  date=%s  tracks=%d  audio=%s (%s)",
+        title, pub_date, len(tracks),
+        "yes" if audio_url else "NO",
+        audio_source or "-",
     )
 
     metadata = {
@@ -330,6 +402,7 @@ def scrape_episode(episode_id: int, page_url: str) -> bool:
         "description": description,
         "artwork_url": artwork_url,
         "audio_url": audio_url,
+        "audio_source": audio_source,
         "buzzsprout_id": buzzsprout_id,
     }
     # Remove None values so we don't overwrite existing data with NULL
@@ -370,3 +443,74 @@ def run_scrape_batch(batch_size: int = BATCH_SIZE) -> int:
             time.sleep(DELAY_BETWEEN_BATCHES)
 
     return success
+
+
+# ---------------------------------------------------------------------------
+# Audio URL refresh (targeted — for no_audio episodes)
+# ---------------------------------------------------------------------------
+
+def refresh_audio_url(episode_id: int, page_url: str) -> bool:
+    """
+    Lightweight refresh: re-fetch the audio URL for a single episode without
+    re-scraping the full tracklist.  Used to recover episodes that were scraped
+    before multi-source audio detection was added.
+
+    Returns True if an audio URL was found and saved.
+    """
+    log.debug("Refreshing audio URL for ep#%d: %s", episode_id, page_url)
+    try:
+        body_html = _fetch_json_body(page_url)
+        resp = get(page_url)
+        soup = BeautifulSoup(resp.text, "lxml")
+        audio_url, buzzsprout_id, audio_source = _extract_audio_url(
+            soup, resp.text, body_html
+        )
+    except Exception as exc:
+        log.error("Audio refresh error for ep#%d: %s", episode_id, exc)
+        return False
+
+    if audio_url:
+        update: dict = {
+            "audio_url": audio_url,
+            "audio_source": audio_source,
+            "audio_status": "pending",
+        }
+        if buzzsprout_id:
+            update["buzzsprout_id"] = buzzsprout_id
+        db.update_episode_metadata(episode_id, **update)
+        log.info("  ep#%d — %s  %s", episode_id, audio_source, audio_url[:70])
+        return True
+
+    log.debug("  ep#%d — still no audio", episode_id)
+    return False
+
+
+def run_audio_refresh_batch(batch_size: int = BATCH_SIZE) -> tuple[int, int]:
+    """
+    Refresh audio URLs for up to batch_size no_audio episodes.
+    Returns (found_count, checked_count).
+    """
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, page_url FROM episodes
+            WHERE audio_status = 'no_audio'
+            ORDER BY year DESC, id ASC
+            LIMIT ?
+            """,
+            (batch_size,),
+        ).fetchall()
+
+    if not rows:
+        log.info("No no_audio episodes to refresh.")
+        return 0, 0
+
+    found = 0
+    for i, row in enumerate(rows, start=1):
+        if refresh_audio_url(row["id"], row["page_url"]):
+            found += 1
+        if i % BATCH_SIZE == 0 and i < len(rows):
+            log.info("Batch pause (%.0fs)…", DELAY_BETWEEN_BATCHES)
+            time.sleep(DELAY_BETWEEN_BATCHES)
+
+    return found, len(rows)

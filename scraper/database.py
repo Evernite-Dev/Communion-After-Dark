@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     pub_date        TEXT,                      -- ISO-8601 date string
     description     TEXT,
     artwork_url     TEXT,
-    audio_url       TEXT,                      -- direct Buzzsprout MP3 URL
+    audio_url       TEXT,                      -- direct MP3 URL or Mixcloud page URL
+    audio_source    TEXT,                      -- 'buzzsprout' | 'direct' | 'mixcloud'
     duration_sec    INTEGER,
 
     -- Local file paths (relative to ARCHIVE_DIR)
@@ -115,9 +116,22 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema changes to existing databases."""
+    migrations = [
+        "ALTER TABLE episodes ADD COLUMN audio_source TEXT",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 # ---------------------------------------------------------------------------

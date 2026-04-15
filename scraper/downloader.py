@@ -83,6 +83,15 @@ def write_metadata_json(ep_dir: Path, episode_id: int, row: dict) -> Path:
 # yt-dlp helper (Mixcloud and other streaming sources)
 # ---------------------------------------------------------------------------
 
+def _ffmpeg_exe() -> str | None:
+    """Return path to the imageio-bundled ffmpeg, or None if not installed."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
+
+
 def _ytdlp_available() -> bool:
     # Check as a module first (picks up venv deps like curl_cffi),
     # fall back to checking for the standalone executable.
@@ -117,8 +126,11 @@ def _download_with_ytdlp(url: str, dest: Path) -> None:
         "--no-progress",
         "--impersonate", "chrome",   # Mixcloud requires browser fingerprint
         "-o", str(tmp),
-        url,
     ]
+    ffmpeg = _ffmpeg_exe()
+    if ffmpeg:
+        cmd += ["--ffmpeg-location", ffmpeg]
+    cmd.append(url)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         tmp.unlink(missing_ok=True)

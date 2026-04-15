@@ -6,7 +6,7 @@ duplicating hundreds of GB.
 
 ```
 NAS IP:    192.168.1.30
-Share:     usbshare
+Share:     usbshare1
 Folder:    media/music/Communion After Dark/
 ```
 
@@ -17,7 +17,7 @@ Folder:    media/music/Communion After Dark/
 Open PowerShell **once** to create the persistent mapping:
 
 ```powershell
-net use Z: \\192.168.1.30\usbshare /user:SynoAdmin /persistent:yes
+net use Z: \\PineNAS\usbshare1 /user:SynoAdmin /persistent:yes
 ```
 
 Windows will prompt for the password.  The mapping survives reboots.
@@ -97,7 +97,7 @@ sudo nano /etc/fstab
 Add this line at the end (one line, no wrapping):
 
 ```
-//192.168.1.30/usbshare  /mnt/nas  cifs  credentials=/etc/nas-credentials,uid=1000,gid=1000,file_mode=0664,dir_mode=0775,iocharset=utf8,nofail,_netdev  0  0
+//PineNAS/usbshare1  /mnt/nas  cifs  credentials=/etc/nas-credentials,uid=1000,gid=1000,file_mode=0664,dir_mode=0775,iocharset=utf8,nofail,_netdev  0  0
 ```
 
 > **`nofail`** — system boots normally even if the NAS is offline.  

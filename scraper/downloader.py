@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 # Path helpers
 # ---------------------------------------------------------------------------
 
-_UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_UNSAFE_CHARS = re.compile(r"[<>:\"/\\|?*',;()\[\]{}\x00-\x1f]")
 _MULTI_DASH   = re.compile(r"-{2,}")
 _MULTI_SPACE  = re.compile(r"\s+")
 
@@ -131,7 +131,7 @@ def _download_with_ytdlp(url: str, dest: Path) -> None:
     if ffmpeg:
         cmd += ["--ffmpeg-location", ffmpeg]
     cmd.append(url)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10800)  # 3h — mixes stream in real time
     if result.returncode != 0:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"yt-dlp failed:\n{result.stderr[-600:]}")

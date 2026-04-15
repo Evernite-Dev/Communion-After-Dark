@@ -105,6 +105,7 @@ def _download_with_ytdlp(url: str, dest: Path) -> None:
         "--audio-quality", "0",
         "--no-playlist",
         "--no-progress",
+        "--impersonate", "chrome",   # Mixcloud requires browser fingerprint
         "-o", str(tmp),
         url,
     ]

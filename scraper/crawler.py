@@ -53,6 +53,11 @@ def crawl_rss() -> int:
         if not page_url.startswith("http"):
             page_url = urljoin(BASE_URL, page_url)
 
+        # Skip anything that isn't an individual episode page
+        if "/listennow/" not in page_url:
+            log.debug("RSS: skipping non-episode URL: %s", page_url)
+            continue
+
         # Try to determine the year from pubDate
         year = None
         published = entry.get("published_parsed")

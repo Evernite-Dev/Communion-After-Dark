@@ -149,18 +149,21 @@ def _extract_pub_date(soup: BeautifulSoup) -> str | None:
 # Title extraction
 # ---------------------------------------------------------------------------
 
+_TITLE_SUFFIX_RE = re.compile(r"\s*[—\-–]\s*Communion After Dark\s*$", re.IGNORECASE)
+
+
 def _extract_title(soup: BeautifulSoup) -> str | None:
     og = soup.find("meta", property="og:title")
     if og and og.get("content"):
-        return og["content"].strip()
+        return _TITLE_SUFFIX_RE.sub("", og["content"].strip())
 
     h1 = soup.find("h1")
     if h1:
-        return h1.get_text(strip=True)
+        return _TITLE_SUFFIX_RE.sub("", h1.get_text(strip=True))
 
     title_tag = soup.find("title")
     if title_tag:
-        return title_tag.get_text(strip=True)
+        return _TITLE_SUFFIX_RE.sub("", title_tag.get_text(strip=True))
 
     return None
 
@@ -185,40 +188,60 @@ def _extract_description(soup: BeautifulSoup) -> str | None:
 # Tracklist parsing
 # ---------------------------------------------------------------------------
 
-# Matches lines like:
-#   00:25 - Artist - Song Title - Album - Label - Country
-#   1:04:02 - Artist - Song Title - Album - Label
-# The timestamp at the start is the distinguishing feature.
+# Actual format observed in the wild:
+#   1:13:48 Vol. A.D. (Ukraine) - Spirituvore - Album - Label
+#   1:19:18 Die Sexual (Los Angeles CA) - Acid Never Dies - EP - Pylon Records
+#
+# Key differences from naive assumption:
+#   • Timestamp is followed by a SPACE, not a dash
+#   • Country / city is in parentheses at the end of the artist name
+#   • \xa0 (non-breaking space) appears throughout
+#   • Station-ID lines ("COMMUNION AFTER DARK") have a timestamp but no " - "
+#     separator — these must be skipped
+
 _TRACK_LINE_RE = re.compile(
-    r"^(?P<ts>\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*"  # timestamp
-    r"(?P<rest>.+)$",
+    r"^\s*(?P<ts>\d{1,2}:\d{2}(?::\d{2})?)\s+(?P<rest>\S.+)$",
     re.UNICODE,
 )
 
-_SPLITTER_RE = re.compile(r"\s*[-–—]\s*")
+# Field separator is " - " (space – dash – space)
+_FIELD_SEP_RE = re.compile(r"\s+-\s+")
+
+# Country / city at the end of an artist string: "Blood Handsome (US)"
+_COUNTRY_RE = re.compile(r"\s*\(([^)]+)\)\s*$")
 
 
 def _parse_track_line(line: str, position: int) -> dict | None:
-    line = line.strip()
+    # Normalise non-breaking spaces before anything else
+    line = line.replace("\xa0", " ").strip()
+
     m = _TRACK_LINE_RE.match(line)
     if not m:
         return None
 
     timestamp = m.group("ts")
-    parts = _SPLITTER_RE.split(m.group("rest").strip())
+    rest = m.group("rest").replace("\xa0", " ").strip()
+
+    parts = [p.strip() for p in _FIELD_SEP_RE.split(rest) if p.strip()]
+
+    # Need at least artist AND song title; bare station-ID lines have no " - "
+    if len(parts) < 2:
+        return None
 
     track: dict = {"position": position, "timestamp": timestamp}
 
-    if len(parts) >= 1:
-        track["artist"] = parts[0].strip()
-    if len(parts) >= 2:
-        track["title"] = parts[1].strip()
-    if len(parts) >= 3:
-        track["album"] = parts[2].strip()
-    if len(parts) >= 4:
-        track["label"] = parts[3].strip()
-    if len(parts) >= 5:
-        track["country"] = parts[4].strip()
+    artist_raw = parts[0]
+
+    # Extract country from trailing parens: "Vol. A.D. (Ukraine)" → country=Ukraine
+    country_m = _COUNTRY_RE.search(artist_raw)
+    if country_m:
+        track["country"] = country_m.group(1).strip()
+        artist_raw = _COUNTRY_RE.sub("", artist_raw).strip()
+
+    track["artist"] = artist_raw
+    track["title"]  = parts[1] if len(parts) > 1 else ""
+    track["album"]  = parts[2] if len(parts) > 2 else ""
+    track["label"]  = parts[3] if len(parts) > 3 else ""
 
     return track
 

@@ -109,41 +109,59 @@ def _download_with_ytdlp(url: str, dest: Path) -> None:
     """
     Download audio from a streaming URL (e.g. Mixcloud) via yt-dlp.
     Saves as MP3 to dest.  Raises RuntimeError on failure.
+
+    Downloads and converts to a local temp directory first, then moves the
+    finished file to dest.  This avoids SMB/NAS issues where ffmpeg fails
+    to open output files on network shares during post-processing.
     """
+    import tempfile
+
     if not _ytdlp_available():
         raise RuntimeError(
             "yt-dlp is not installed. Install it with: pip install yt-dlp"
         )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Write to a temp path; yt-dlp may append .mp3 if the format conversion runs
-    tmp = dest.with_suffix(".ytdlp.tmp")
-    cmd = [
-        sys.executable, "-m", "yt_dlp",  # run via venv Python so curl_cffi is visible
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "--no-playlist",
-        "--no-progress",
-        "--impersonate", "chrome",   # Mixcloud requires browser fingerprint
-        "-o", str(tmp),
-    ]
-    ffmpeg = _ffmpeg_exe()
-    if ffmpeg:
-        cmd += ["--ffmpeg-location", ffmpeg]
-    cmd.append(url)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10800)  # 3h — mixes stream in real time
-    if result.returncode != 0:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"yt-dlp failed:\n{result.stderr[-600:]}")
-    # yt-dlp appends the extension after conversion; check both names
-    if tmp.exists():
-        tmp.rename(dest)
-    else:
-        mp3_tmp = tmp.with_name(tmp.name + ".mp3")
-        if mp3_tmp.exists():
-            mp3_tmp.rename(dest)
-        else:
-            raise RuntimeError(f"yt-dlp succeeded but output not found near {tmp}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_out = Path(tmpdir) / "audio.mp3"
+        cmd = [
+            sys.executable, "-m", "yt_dlp",  # use venv Python so curl_cffi is visible
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "--no-playlist",
+            "--no-progress",
+            "--impersonate", "chrome",   # Mixcloud requires browser fingerprint
+            "-o", str(local_out),
+        ]
+        ffmpeg = _ffmpeg_exe()
+        if ffmpeg:
+            cmd += ["--ffmpeg-location", ffmpeg]
+        cmd.append(url)
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=10800,  # 3h — mixes stream in real time before conversion
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"yt-dlp failed:\n{result.stderr[-600:]}")
+
+        # yt-dlp may write audio.mp3 directly, or audio.mp3.mp3 if the source
+        # was already named .mp3.  Find whichever exists and move to dest.
+        candidates = [
+            local_out,
+            local_out.with_suffix(".mp3"),          # audio.mp3  (direct)
+            local_out.with_name("audio.mp3.mp3"),   # rare double-ext edge case
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                shutil.move(str(candidate), str(dest))
+                return
+
+        raise RuntimeError(
+            f"yt-dlp exited cleanly but no output file found in {tmpdir}.\n"
+            f"stderr: {result.stderr[-300:]}"
+        )
 
 
 # ---------------------------------------------------------------------------

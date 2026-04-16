@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 # These are overridden by docker-compose env / volume mounts
-ENV CAD_DB_PATH=/data/cad.db
+ENV CAD_DB_PATH=/data/cad_archive.db
 ENV CAD_ARCHIVE_ROOT=/nas
 
 EXPOSE 8765

@@ -160,7 +160,7 @@ async def stream_audio(episode_id: int, request: Request):
     if not row or not row["audio_path"]:
         raise HTTPException(404, "Audio not available for this episode")
 
-    audio_file = ARCHIVE_ROOT / row["audio_path"]
+    audio_file = ARCHIVE_ROOT / row["audio_path"].replace("\\", "/")
     if not audio_file.exists():
         raise HTTPException(404, "Audio file missing from archive")
 
@@ -218,7 +218,7 @@ def get_artwork(episode_id: int):
     if not row or not row["artwork_path"]:
         raise HTTPException(404, "Artwork not available")
 
-    artwork_file = ARCHIVE_ROOT / row["artwork_path"]
+    artwork_file = ARCHIVE_ROOT / row["artwork_path"].replace("\\", "/")
     if not artwork_file.exists():
         raise HTTPException(404, "Artwork file missing from archive")
 

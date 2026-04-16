@@ -100,4 +100,7 @@ SPECIAL_ARCHIVE_URLS = {
     "2020-bonus":  "/2020-bonus-shows",
     "covers":      "/annual-covers-shows",
     "halloween":   "/halloween-special-editions",
+    # Main listennow page — shows the most recent ~20 episodes regardless of year.
+    # Used to discover new episodes before a year-archive page is created (e.g. 2026).
+    "recent":      "/listennow",
 }

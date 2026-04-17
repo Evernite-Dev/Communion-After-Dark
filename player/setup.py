@@ -11,6 +11,9 @@ setup(
             "cad-player=cad_player.main:main",
         ],
     },
+    package_data={
+        "cad_player": ["fonts/*.ttf", "assets/*"],
+    },
     python_requires=">=3.11",
     install_requires=[
         # PyGObject (GTK4 + GStreamer) is provided by the system/Flatpak runtime

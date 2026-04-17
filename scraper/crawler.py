@@ -83,15 +83,26 @@ def _extract_episode_links(html: str, base_url: str) -> list[str]:
     """
     Return a deduplicated list of full episode page URLs found in html.
     Looks for /listennow/<slug> href patterns.
+
+    Excluded URL patterns (not individual episodes):
+      /listennow/tag/...       — Squarespace tag listing pages
+      /listennow/category/...  — Squarespace category listing pages
     """
     soup = BeautifulSoup(html, "lxml")
     urls: set[str] = set()
     for tag in soup.find_all("a", href=True):
         href: str = tag["href"]
-        # Some hrefs are relative, some absolute; normalise all.
-        if _LISTENNOW_RE.search(href):
-            full = urljoin(base_url, href.split("?")[0])  # strip query params
-            urls.add(full)
+        if not _LISTENNOW_RE.search(href):
+            continue
+        # Strip both query params and fragments — fragments are client-side
+        # anchors and must not be stored as distinct episode URLs.
+        clean = href.split("?")[0].split("#")[0]
+        # Skip tag/category listing pages — they are not individual episodes.
+        clean_lower = clean.lower()
+        if "/listennow/tag/" in clean_lower or "/listennow/category/" in clean_lower:
+            continue
+        full = urljoin(base_url, clean)
+        urls.add(full)
     return sorted(urls)
 
 

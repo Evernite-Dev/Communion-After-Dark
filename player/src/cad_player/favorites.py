@@ -49,12 +49,14 @@ CREATE TABLE IF NOT EXISTS favorites (
     pub_date        TEXT,
     audio_path      TEXT,
     artwork_path    TEXT,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
     favorited_at    TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(episode_id, position)
 );
 
-CREATE INDEX IF NOT EXISTS idx_favorites_episode ON favorites(episode_id);
-CREATE INDEX IF NOT EXISTS idx_favorites_date    ON favorites(favorited_at);
+CREATE INDEX IF NOT EXISTS idx_favorites_episode   ON favorites(episode_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_date      ON favorites(favorited_at);
+CREATE INDEX IF NOT EXISTS idx_favorites_sort      ON favorites(sort_order);
 """
 
 
@@ -102,7 +104,15 @@ class FavoritesStore:
             self._conn = sqlite3.connect(str(db_path))
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_FAVORITES_DDL)
+            # Migrate: add sort_order column to existing databases
+            try:
+                self._conn.execute(
+                    "ALTER TABLE favorites ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
             self._conn.commit()
+            self._ensure_sort_order()
         else:
             # Fallback: JSON sidecar file
             if archive_root:
@@ -145,13 +155,31 @@ class FavoritesStore:
         return self._json_episode_positions(episode_id)
 
     def get_all(self) -> list[Favorite]:
-        """Return all favorites ordered by most-recently saved first."""
+        """Return all favorites in user-defined order (sort_order ASC)."""
         if self._conn:
             rows = self._conn.execute(
-                "SELECT * FROM favorites ORDER BY favorited_at DESC"
+                "SELECT * FROM favorites ORDER BY sort_order ASC, favorited_at DESC"
             ).fetchall()
             return [self._row_to_fav(r) for r in rows]
         return self._json_get_all()
+
+    def reorder(self, from_idx: int, to_idx: int) -> None:
+        """Move the favorite at from_idx to to_idx (0-based, from get_all order)."""
+        if not self._conn or from_idx == to_idx:
+            return
+        rows = self._conn.execute(
+            "SELECT id FROM favorites ORDER BY sort_order ASC, favorited_at DESC"
+        ).fetchall()
+        if from_idx < 0 or from_idx >= len(rows) or to_idx < 0 or to_idx >= len(rows):
+            return
+        ids = [r["id"] for r in rows]
+        item = ids.pop(from_idx)
+        ids.insert(to_idx, item)
+        for i, id_ in enumerate(ids):
+            self._conn.execute(
+                "UPDATE favorites SET sort_order = ? WHERE id = ?", (i, id_)
+            )
+        self._conn.commit()
 
     def count(self) -> int:
         if self._conn:
@@ -161,6 +189,25 @@ class FavoritesStore:
     # ------------------------------------------------------------------
     # SQLite backend
     # ------------------------------------------------------------------
+
+    def _ensure_sort_order(self) -> None:
+        """Assign sequential sort_order to existing rows that are all 0 (first migration)."""
+        total = self._conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
+        if total <= 1:
+            return
+        unset = self._conn.execute(
+            "SELECT COUNT(*) FROM favorites WHERE sort_order = 0"
+        ).fetchone()[0]
+        if unset == total:
+            # All rows uninitialized — number them by favorited_at DESC
+            rows = self._conn.execute(
+                "SELECT id FROM favorites ORDER BY favorited_at DESC"
+            ).fetchall()
+            for i, row in enumerate(rows):
+                self._conn.execute(
+                    "UPDATE favorites SET sort_order = ? WHERE id = ?", (i, row["id"])
+                )
+            self._conn.commit()
 
     def _db_toggle(self, episode_id: int, position: int, **fields) -> bool:
         existing = self._conn.execute(
@@ -176,12 +223,16 @@ class FavoritesStore:
             self._conn.commit()
             return False
 
+        # Place new favorites at the end of the user-defined order
+        max_order = self._conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM favorites"
+        ).fetchone()[0]
         self._conn.execute(
             """
             INSERT INTO favorites
                 (episode_id, position, artist, title, timestamp,
-                 episode_title, pub_date, audio_path, artwork_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 episode_title, pub_date, audio_path, artwork_path, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 episode_id, position,
@@ -192,6 +243,7 @@ class FavoritesStore:
                 fields.get("pub_date", ""),
                 fields.get("audio_path", ""),
                 fields.get("artwork_path", ""),
+                max_order + 1,
             ),
         )
         self._conn.commit()

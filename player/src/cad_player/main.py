@@ -55,6 +55,9 @@ class CadApplication(Adw.Application):
         self.connect("activate", self._on_activate)
 
     def _on_activate(self, app: Adw.Application) -> None:
+        # Force dark mode — the player theme is built around a black background.
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+
         self._player  = AudioPlayer()
         self._library = Library(
             archive_root=self._archive_root,

@@ -79,7 +79,10 @@ def _fetch_json_body(page_url: str) -> str:
     are JavaScript-rendered and invisible in the static page HTML.
     """
     try:
-        resp = get(page_url + "?format=json-pretty")
+        # Strip any fragment before appending the query param — a fragment
+        # after the query string is malformed and breaks the Squarespace API.
+        clean_url = page_url.split("#")[0]
+        resp = get(clean_url + "?format=json-pretty")
         data = resp.json()
         return data.get("item", {}).get("body", "") or ""
     except Exception as exc:
@@ -147,14 +150,21 @@ def _extract_artwork_url(soup: BeautifulSoup) -> str | None:
     # Open Graph image is the most reliable
     og = soup.find("meta", property="og:image")
     if og and og.get("content"):
-        return og["content"]
+        url = og["content"]
+        # og:image often uses a protocol-relative URL (//...) — normalise to https
+        if url.startswith("//"):
+            url = "https:" + url
+        return url
 
     # Squarespace CDN images in the post body
     for img in soup.find_all("img", src=True):
         src: str = img["src"]
         if "squarespace-cdn.com" in src or "static1.squarespace.com" in src:
             # Prefer the largest variant — strip Squarespace resize params
-            return src.split("?")[0]
+            src = src.split("?")[0]
+            if src.startswith("//"):
+                src = "https:" + src
+            return src
 
     return None
 
@@ -388,6 +398,10 @@ def scrape_episode(episode_id: int, page_url: str) -> bool:
     artwork_url = _extract_artwork_url(soup)
     audio_url, buzzsprout_id, audio_source = _extract_audio_url(soup, resp.text, body_html)
     tracks = _extract_tracklist(body_soup)
+    # For recent episodes the JSON body may omit the tracklist text — fall back
+    # to the regular page HTML which always includes it.
+    if not tracks and body_soup is not soup:
+        tracks = _extract_tracklist(soup)
 
     log.info(
         "  title=%r  date=%s  tracks=%d  audio=%s (%s)",

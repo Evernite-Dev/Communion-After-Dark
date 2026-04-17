@@ -27,6 +27,13 @@ class Track:
 
 
 @dataclass
+class TrackResult:
+    """A single track match from a search, with its parent episode attached."""
+    track: "Track"
+    episode: "Episode"
+
+
+@dataclass
 class Episode:
     id: int
     title: str
@@ -98,6 +105,16 @@ class Library:
                     or any(q in t.artist.lower() or q in t.title.lower()
                            for t in ep.tracklist)):
                 results.append(ep)
+        return results
+
+    def search_tracks(self, query: str) -> list[TrackResult]:
+        """Return individual track matches (artist or title contains query)."""
+        q = query.lower()
+        results = []
+        for ep in self._episodes:
+            for track in ep.tracklist:
+                if q in track.artist.lower() or q in track.title.lower():
+                    results.append(TrackResult(track=track, episode=ep))
         return results
 
     # ------------------------------------------------------------------

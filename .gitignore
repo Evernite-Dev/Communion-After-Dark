@@ -9,6 +9,13 @@ archive/
 .env
 
 # ---------------------------------------------------------------------------
+# Licensed fonts — Adobe Fonts license prohibits redistribution of .ttf files
+# Place font files locally; they are gitignored everywhere in the project.
+# ---------------------------------------------------------------------------
+*.ttf
+*.otf
+
+# ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------
 __pycache__/

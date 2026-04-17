@@ -243,6 +243,9 @@ def download_artwork_batch(batch_size: int = BATCH_SIZE * 3) -> int:
     for row in pending:
         ep_id    = row["id"]
         url      = row["artwork_url"]
+        # Normalise protocol-relative URLs stored from og:image scrapes
+        if url and url.startswith("//"):
+            url = "https:" + url
         title    = row["title"] or f"episode-{ep_id}"
         year     = row["year"]
         pub_date = row["pub_date"]

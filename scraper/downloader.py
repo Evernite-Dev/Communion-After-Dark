@@ -42,7 +42,7 @@ def _safe_name(text: str, max_len: int = 60) -> str:
     text = _UNSAFE_CHARS.sub("", text)
     text = text.replace(" ", "-").lower()
     text = _MULTI_DASH.sub("-", text)
-    return text[:max_len].strip("-")
+    return text[:max_len].strip("-.")
 
 
 def episode_dir(year: int | None, pub_date: str | None, title: str | None) -> Path:
@@ -131,9 +131,14 @@ def _download_with_ytdlp(url: str, dest: Path) -> None:
             "--audio-quality", "0",
             "--no-playlist",
             "--no-progress",
-            "--impersonate", "chrome",   # Mixcloud requires browser fingerprint
             "-o", str(local_out),
         ]
+        # --impersonate requires curl_cffi; skip the flag if it's not installed.
+        try:
+            import curl_cffi  # noqa: F401
+            cmd += ["--impersonate", "chrome"]
+        except ImportError:
+            pass
         ffmpeg = _ffmpeg_exe()
         if ffmpeg:
             cmd += ["--ffmpeg-location", ffmpeg]

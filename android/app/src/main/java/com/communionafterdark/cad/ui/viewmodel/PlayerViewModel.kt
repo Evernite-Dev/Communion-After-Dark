@@ -2,11 +2,13 @@ package com.communionafterdark.cad.ui.viewmodel
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.communionafterdark.cad.data.CadRepository
@@ -14,6 +16,7 @@ import com.communionafterdark.cad.data.api.ApiClient
 import com.communionafterdark.cad.data.model.Episode
 import com.communionafterdark.cad.data.model.Track
 import com.communionafterdark.cad.player.CadPlayerService
+import com.communionafterdark.cad.widget.CadWidget
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +38,8 @@ data class PlaybackState(
 
 class PlayerViewModel(context: Context) : ViewModel() {
 
+    private val appContext: Context = context.applicationContext
+
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
@@ -52,29 +57,72 @@ class PlayerViewModel(context: Context) : ViewModel() {
         controllerFuture = future
         future.addListener(
             {
-                controller = future.get()
-                startPositionPolling()
+                try {
+                    controller = future.get()
+                    startPositionPolling()
+                } catch (e: Exception) {
+                    // Service connection failed; playback unavailable until next launch
+                }
             },
             ContextCompat.getMainExecutor(context),
         )
     }
 
-    private fun startPositionPolling() {
+    private fun syncEpisodeFromMediaItem(mediaItem: MediaItem?) {
+        if (mediaItem == null) return
+        val episodeId = mediaItem.mediaMetadata.extras?.getInt("episodeId", -1) ?: -1
+        if (episodeId == -1) return
+        if (episodeId == _state.value.episode?.id) return
         viewModelScope.launch {
+            val episode = repository.getEpisode(episodeId).getOrNull() ?: return@launch
+            val tracks = repository.getTracks(episodeId).getOrNull() ?: emptyList()
+            _state.update { it.copy(episode = episode, tracks = tracks, favoritedPositions = emptySet()) }
+        }
+    }
+
+    private fun startPositionPolling() {
+        val ctrl = controller ?: return
+
+        ctrl.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                _state.update { it.copy(isPlaying = isPlaying) }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val durMs = ctrl.duration.coerceAtLeast(0L)
+                _state.update { it.copy(durationMs = durMs) }
+            }
+
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                syncEpisodeFromMediaItem(mediaItem)
+            }
+        })
+
+        // Restore state if service was already playing when the controller connected
+        syncEpisodeFromMediaItem(ctrl.currentMediaItem)
+
+        viewModelScope.launch {
+            var lastWidgetTrackPosition = Int.MIN_VALUE
             while (true) {
                 delay(500)
-                val ctrl = controller ?: continue
-                val posMs = ctrl.currentPosition
-                val durMs = ctrl.duration.coerceAtLeast(0L)
-                val playing = ctrl.isPlaying
-                val posSec = posMs / 1000L
-                _state.update {
-                    it.copy(
-                        isPlaying = playing,
-                        positionMs = posMs,
-                        durationMs = durMs,
-                        currentTrackPosition = currentTrackPosition(posSec),
-                    )
+                if (ctrl.isPlaying) {
+                    val posMs = ctrl.currentPosition
+                    val posSec = posMs / 1000L
+                    val newTrackPos = currentTrackPosition(posSec)
+                    _state.update {
+                        it.copy(
+                            positionMs = posMs,
+                            durationMs = ctrl.duration.coerceAtLeast(0L),
+                            currentTrackPosition = newTrackPos,
+                        )
+                    }
+                    if (newTrackPos != lastWidgetTrackPosition) {
+                        lastWidgetTrackPosition = newTrackPos
+                        val trackName = _state.value.tracks
+                            .firstOrNull { it.position == newTrackPos }
+                            ?.let { "${it.artist} – ${it.title}" } ?: ""
+                        CadWidget.updateState(appContext, trackName = trackName)
+                    }
                 }
             }
         }
@@ -89,15 +137,45 @@ class PlayerViewModel(context: Context) : ViewModel() {
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(episode.displayTitle)
-                    .setArtworkUri(
-                        android.net.Uri.parse(episode.artworkUrl(ApiClient.BASE_URL))
-                    )
+                    .setExtras(Bundle().apply { putInt("episodeId", episode.id) })
+                    .apply {
+                        if (episode.hasArtwork) {
+                            setArtworkUri(android.net.Uri.parse(episode.artworkUrl(ApiClient.BASE_URL)))
+                        }
+                    }
                     .build()
             )
             .build()
 
         controller?.let { ctrl ->
             ctrl.setMediaItem(mediaItem)
+            ctrl.prepare()
+            ctrl.play()
+        }
+    }
+
+    fun playEpisodeFromTimestamp(episode: Episode, tracks: List<Track>, timestamp: String) {
+        _state.update { it.copy(episode = episode, tracks = tracks, favoritedPositions = emptySet()) }
+        val positionMs = parseTimestamp(timestamp)
+        val audioUrl = episode.audioUrl(ApiClient.BASE_URL)
+        val mediaItem = MediaItem.Builder()
+            .setUri(audioUrl)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(episode.displayTitle)
+                    .setExtras(Bundle().apply { putInt("episodeId", episode.id) })
+                    .apply {
+                        if (episode.hasArtwork) {
+                            setArtworkUri(android.net.Uri.parse(episode.artworkUrl(ApiClient.BASE_URL)))
+                        }
+                    }
+                    .build()
+            )
+            .build()
+
+        controller?.let { ctrl ->
+            ctrl.setMediaItem(mediaItem)
+            ctrl.seekTo(positionMs)
             ctrl.prepare()
             ctrl.play()
         }
@@ -163,6 +241,32 @@ class PlayerViewModel(context: Context) : ViewModel() {
             }
         } catch (e: NumberFormatException) {
             0L
+        }
+    }
+
+    private var lastPrevPressMs = 0L
+
+    fun prevTrack() {
+        val tracks = _state.value.tracks
+        val ctrl = controller ?: return
+        val currentIdx = tracks.indexOfFirst { it.position == _state.value.currentTrackPosition }
+        val now = System.currentTimeMillis()
+        val isDoublePress = lastPrevPressMs != 0L && (now - lastPrevPressMs) < 3000L
+        lastPrevPressMs = now
+        if (isDoublePress && currentIdx > 0) {
+            ctrl.seekTo(parseTimestamp(tracks[currentIdx - 1].timestamp))
+        } else {
+            val currentTrackMs = if (currentIdx >= 0) parseTimestamp(tracks[currentIdx].timestamp) else 0L
+            ctrl.seekTo(currentTrackMs)
+        }
+    }
+
+    fun nextTrack() {
+        val tracks = _state.value.tracks
+        val ctrl = controller ?: return
+        val currentIdx = tracks.indexOfFirst { it.position == _state.value.currentTrackPosition }
+        if (currentIdx >= 0 && currentIdx < tracks.size - 1) {
+            ctrl.seekTo(parseTimestamp(tracks[currentIdx + 1].timestamp))
         }
     }
 

@@ -52,6 +52,7 @@ fun FavoritesScreen(
     favVm: FavoritesViewModel,
     playerVm: PlayerViewModel,
     onEpisodeClick: (Int) -> Unit,
+    onTrackPlay: (episodeId: Int, timestamp: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by favVm.uiState.collectAsState()
@@ -102,7 +103,7 @@ fun FavoritesScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onEpisodeClick(favorite.episodeId) }
+                                .clickable { onTrackPlay(favorite.episodeId, favorite.timestamp) }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {

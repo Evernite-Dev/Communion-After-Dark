@@ -302,6 +302,29 @@ def get_tracks_for_episode(episode_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def apply_mixcloud_url(pub_date: str, audio_url: str) -> int:
+    """
+    For any episode on pub_date that has no audio URL yet, set the Mixcloud URL
+    and reset audio_status to 'pending' so the downloader picks it up.
+    Returns number of rows updated.
+    """
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE episodes
+            SET audio_url    = ?,
+                audio_source = 'mixcloud',
+                audio_status = 'pending',
+                updated_at   = datetime('now')
+            WHERE pub_date      = ?
+              AND audio_url     IS NULL
+              AND audio_status  = 'no_audio'
+            """,
+            (audio_url, pub_date),
+        )
+        return cur.rowcount
+
+
 def stats() -> dict:
     with get_connection() as conn:
         row = conn.execute(

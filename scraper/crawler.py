@@ -17,7 +17,7 @@ import feedparser
 from bs4 import BeautifulSoup
 
 import database as db
-from config import BASE_URL, RSS_URL, YEAR_ARCHIVE_URLS, SPECIAL_ARCHIVE_URLS
+from config import BASE_URL, RSS_URL, MIXCLOUD_PROFILE, YEAR_ARCHIVE_URLS, SPECIAL_ARCHIVE_URLS
 from http_client import get
 
 log = logging.getLogger(__name__)
@@ -145,3 +145,47 @@ def crawl_year_pages(years: list[int] | None = None) -> int:
 
     log.info("Year-page crawl complete — %d episode URLs discovered total", total)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Mixcloud API — direct audio URL discovery
+# ---------------------------------------------------------------------------
+
+def crawl_mixcloud(limit: int = 5) -> int:
+    """
+    Query the Mixcloud API for recent uploads by MIXCLOUD_PROFILE.
+    For any upload whose date matches an episode currently marked no_audio,
+    set the Mixcloud URL directly so the downloader can pick it up via yt-dlp.
+
+    This is faster than waiting for the Squarespace page to embed the widget,
+    since Mixcloud receives the upload before the site embed is updated.
+
+    Returns number of episodes updated.
+    """
+    api_url = f"https://api.mixcloud.com/{MIXCLOUD_PROFILE}/cloudcasts/?limit={limit}"
+    log.info("Querying Mixcloud API: %s", api_url)
+    try:
+        resp = get(api_url)
+        data = resp.json()
+    except Exception as exc:
+        log.warning("Mixcloud API fetch failed: %s", exc)
+        return 0
+
+    cloudcasts = data.get("data", [])
+    if not cloudcasts:
+        log.info("Mixcloud API returned no recent uploads.")
+        return 0
+
+    updated = 0
+    for cast in cloudcasts:
+        url = cast.get("url", "").rstrip("/") + "/"
+        created = (cast.get("created_time") or "")[:10]  # YYYY-MM-DD
+        if not url or not created:
+            continue
+        n = db.apply_mixcloud_url(created, url)
+        if n:
+            log.info("  Mixcloud match on %s — updated %d episode(s): %s", created, n, url[:70])
+            updated += n
+
+    log.info("Mixcloud crawl complete — %d episode(s) updated", updated)
+    return updated

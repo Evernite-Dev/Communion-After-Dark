@@ -1,9 +1,13 @@
 package com.communionafterdark.cad
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.communionafterdark.cad.worker.NewEpisodeCheckWorker
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -57,6 +62,15 @@ import com.communionafterdark.cad.ui.viewmodel.SearchViewModel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        NewEpisodeCheckWorker.createNotificationChannel(this)
+        NewEpisodeCheckWorker.scheduleIfNeeded(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
+
         enableEdgeToEdge()
         setContent {
             CadTheme {
@@ -77,7 +91,6 @@ fun CadApp(
     val currentDestination = navBackStackEntry?.destination
 
     val listVm: EpisodeListViewModel = viewModel()
-    val detailVm: EpisodeDetailViewModel = viewModel()
     val favVm: FavoritesViewModel = viewModel()
     val searchVm: SearchViewModel = viewModel()
     val playerVm: PlayerViewModel = viewModel(factory = playerVmFactory)
@@ -99,8 +112,8 @@ fun CadApp(
                     MiniPlayer(
                         state = playerState,
                         onTogglePlay = { playerVm.togglePlayPause() },
-                        onPrev = { /* placeholder */ },
-                        onNext = { /* placeholder */ },
+                        onPrev = { playerVm.prevTrack() },
+                        onNext = { playerVm.nextTrack() },
                         onSeek = { fraction ->
                             playerVm.seekTo((fraction * playerState.durationMs).toLong())
                         },
@@ -130,7 +143,7 @@ fun CadApp(
                         } == true,
                         onClick = {
                             navController.navigate(Screen.EpisodeList.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
+                                popUpTo(Screen.EpisodeList.route) {
                                     saveState = true
                                 }
                                 launchSingleTop = true
@@ -155,7 +168,7 @@ fun CadApp(
                         } == true,
                         onClick = {
                             navController.navigate(Screen.Favorites.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
+                                popUpTo(Screen.EpisodeList.route) {
                                     saveState = true
                                 }
                                 launchSingleTop = true
@@ -175,12 +188,41 @@ fun CadApp(
                         ),
                     )
                     NavigationBarItem(
+                        selected = false,
+                        onClick = {
+                            scope.launch {
+                                val episodes = repository.getEpisodes(audioOnly = true, limit = 1000)
+                                    .getOrNull()?.ifEmpty { null } ?: return@launch
+                                val episode = episodes.random()
+                                val tracks = repository.getTracks(episode.id)
+                                    .getOrNull()?.ifEmpty { null } ?: return@launch
+                                val track = tracks.random()
+                                playerVm.playEpisode(episode, tracks)
+                                playerVm.seekToTimestamp(track.timestamp)
+                                navController.navigate(Screen.EpisodeDetail.route(episode.id)) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        },
+                        icon = {
+                            Icon(Icons.Filled.Shuffle, contentDescription = "Random")
+                        },
+                        label = { Text("Random") },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = AccentRed,
+                            selectedTextColor = AccentRed,
+                            unselectedIconColor = TextSecondary,
+                            unselectedTextColor = TextSecondary,
+                            indicatorColor = Black,
+                        ),
+                    )
+                    NavigationBarItem(
                         selected = currentDestination?.hierarchy?.any {
                             it.route == Screen.Search.route
                         } == true,
                         onClick = {
                             navController.navigate(Screen.Search.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
+                                popUpTo(Screen.EpisodeList.route) {
                                     saveState = true
                                 }
                                 launchSingleTop = true
@@ -239,6 +281,7 @@ fun CadApp(
                 ),
             ) { backStackEntry ->
                 val episodeId = backStackEntry.arguments?.getInt(Screen.EpisodeDetail.ARG) ?: return@composable
+                val detailVm: EpisodeDetailViewModel = viewModel(backStackEntry)
                 EpisodeDetailScreen(
                     episodeId = episodeId,
                     detailVm = detailVm,
@@ -254,6 +297,17 @@ fun CadApp(
                     playerVm = playerVm,
                     onEpisodeClick = { id ->
                         navController.navigate(Screen.EpisodeDetail.route(id))
+                    },
+                    onTrackPlay = { episodeId, timestamp ->
+                        if (playerState.episode?.id == episodeId) {
+                            playerVm.seekToTimestamp(timestamp)
+                        } else {
+                            scope.launch {
+                                val episode = repository.getEpisode(episodeId).getOrNull() ?: return@launch
+                                val tracks = repository.getTracks(episodeId).getOrDefault(emptyList())
+                                playerVm.playEpisodeFromTimestamp(episode, tracks, timestamp)
+                            }
+                        }
                     },
                     modifier = Modifier.fillMaxSize(),
                 )

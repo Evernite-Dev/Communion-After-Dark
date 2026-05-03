@@ -51,6 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import DB_PATH
+import config
 import database as db
 import crawler
 import extractor
@@ -79,6 +80,43 @@ log = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _get_this_weeks_episode_title() -> str | None:
+    """Return the title of this week's captured episode, or None."""
+    monday = _this_weeks_monday()
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        row = conn.execute(
+            "SELECT title FROM episodes "
+            "WHERE pub_date >= ? AND audio_status = 'done' "
+            "ORDER BY pub_date DESC LIMIT 1",
+            (monday,),
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _notify_new_episode(title: str) -> None:
+    """POST a push notification to ntfy after a successful episode capture."""
+    if not config.NTFY_URL:
+        return
+    try:
+        import requests as _req
+        _req.post(
+            config.NTFY_URL,
+            data=f"New episode available: {title}",
+            headers={
+                "Title": "Communion After Dark",
+                "Tags": "headphones",
+                "Priority": "default",
+            },
+            timeout=10,
+        )
+        log.info("Push notification sent.")
+    except Exception as exc:
+        log.warning("Push notification failed (non-fatal): %s", exc)
+
+
 def _this_weeks_monday() -> str:
     """Return the ISO-8601 date of the Monday of the current week."""
     today = date.today()
@@ -105,19 +143,68 @@ def _episode_captured_this_week() -> bool:
 
 def _reset_audio_errors() -> int:
     """
-    Reset any episodes stuck in audio_status='error' back to 'pending' so
-    they are retried this pass.  Returns number of rows reset.
+    Reset audio_status='error' back to 'pending' for this week's episodes only.
+    Old episodes with dead URLs are left as 'error' so they don't consume
+    download slots on the weekly new-episode run.
+    Returns number of rows reset.
     """
+    monday = _this_weeks_monday()
     conn = sqlite3.connect(str(DB_PATH))
     try:
         cur = conn.execute(
             "UPDATE episodes SET audio_status = 'pending', audio_error = NULL "
-            "WHERE audio_status = 'error'"
+            "WHERE audio_status = 'error' AND pub_date >= ?",
+            (monday,),
         )
         conn.commit()
         return cur.rowcount
     finally:
         conn.close()
+
+
+def _fill_years_from_pub_date() -> int:
+    """
+    For episodes discovered via listing pages (year=NULL) that have since been
+    scraped, backfill year from the pub_date so the download queue sorts correctly.
+    Returns number of rows updated.
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        cur = conn.execute(
+            """
+            UPDATE episodes
+            SET year = CAST(SUBSTR(pub_date, 1, 4) AS INTEGER)
+            WHERE year IS NULL AND pub_date IS NOT NULL
+            """
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def _refresh_this_weeks_audio() -> int:
+    """
+    Re-scrape audio URLs only for this week's no_audio episodes.
+    Avoids flooding the batch with old episodes that have dead links.
+    Returns number of episodes that now have a URL.
+    """
+    monday = _this_weeks_monday()
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        rows = conn.execute(
+            "SELECT id, page_url FROM episodes "
+            "WHERE audio_status = 'no_audio' AND pub_date >= ?",
+            (monday,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    found = 0
+    for row in rows:
+        if extractor.refresh_audio_url(row["id"], row["page_url"]):
+            found += 1
+    return found
 
 
 def _run_pipeline() -> dict:
@@ -138,11 +225,21 @@ def _run_pipeline() -> dict:
     log.info("Step 2/4  Scraping metadata")
     scraped = extractor.run_scrape_batch(batch_size=5)
     log.info(f"          {scraped} episode(s) scraped")
+    filled = _fill_years_from_pub_date()
+    if filled:
+        log.info(f"          {filled} episode(s) had year backfilled from pub_date")
 
     log.info("Step 3/4  Downloading audio")
     reset = _reset_audio_errors()
     if reset:
         log.info(f"          {reset} error row(s) reset to pending for retry")
+    # Try Mixcloud API first — faster than waiting for the site embed to appear.
+    mixcloud_found = crawler.crawl_mixcloud()
+    if not mixcloud_found:
+        # Fall back to re-scraping the episode page for the embed widget.
+        refreshed = _refresh_this_weeks_audio()
+        if refreshed:
+            log.info(f"          audio URL refresh: {refreshed} this-week episode(s) now have a URL")
     audio = downloader.download_audio_batch(batch_size=5)
     log.info(f"          {audio} audio file(s) downloaded")
 
@@ -186,6 +283,7 @@ def main() -> None:
             f"audio={counts['audio']}  "
             f"tagged={counts['tagged']}"
         )
+        _notify_new_episode(_get_this_weeks_episode_title() or "new episode")
     else:
         log.info(
             "Episode not yet available after this pass.  "

@@ -77,6 +77,13 @@ dependencies {
     // Drag-to-reorder
     implementation(libs.reorderable)
 
+    // Home screen widget
+    implementation("androidx.glance:glance-appwidget:1.1.0")
+    implementation("androidx.glance:glance-material3:1.1.0")
+
+    // WorkManager (new episode notifications)
+    implementation(libs.work.runtime.ktx)
+
     // Core
     implementation(libs.core.ktx)
 

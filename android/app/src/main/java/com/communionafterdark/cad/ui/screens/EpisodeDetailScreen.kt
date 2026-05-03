@@ -1,14 +1,14 @@
 package com.communionafterdark.cad.ui.screens
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -53,9 +53,19 @@ fun EpisodeDetailScreen(
 ) {
     val uiState by detailVm.uiState.collectAsState()
     val playerState by playerVm.state.collectAsState()
+    val listState = rememberLazyListState()
 
     LaunchedEffect(episodeId) {
         detailVm.loadEpisode(episodeId)
+    }
+
+    // Scroll to the active track whenever it changes or tracks finish loading.
+    // Item layout: 0 = artwork, 1 = metadata, 2 = tracklist header, 3+ = track rows.
+    val activeTrackIndex = uiState.tracks.indexOfFirst { it.position == playerState.currentTrackPosition }
+    LaunchedEffect(playerState.currentTrackPosition, uiState.tracks.size) {
+        if (activeTrackIndex >= 0 && uiState.tracks.isNotEmpty()) {
+            listState.animateScrollToItem(activeTrackIndex + 3)
+        }
     }
 
     Column(modifier = modifier) {
@@ -98,90 +108,96 @@ fun EpisodeDetailScreen(
             return@Column
         }
 
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()),
-        ) {
-            // Full-width artwork
-            AsyncImage(
-                model = episode.artworkUrl(ApiClient.BASE_URL),
-                contentDescription = episode.displayTitle,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
-            )
-
-            Column(modifier = Modifier.padding(16.dp)) {
-                // Title
-                Text(
-                    text = episode.displayTitle,
-                    style = androidx.compose.material3.MaterialTheme.typography.headlineLarge,
-                    color = White,
+        LazyColumn(state = listState) {
+            // Item 0: full-width artwork
+            item {
+                AsyncImage(
+                    model = episode.artworkUrl(ApiClient.BASE_URL),
+                    contentDescription = episode.displayTitle,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f),
                 )
+            }
 
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Date
-                Text(
-                    text = episode.pubDate ?: "",
-                    color = TextSecondary,
-                    fontSize = 14.sp,
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Play button
-                Button(
-                    onClick = { playerVm.playEpisode(episode, uiState.tracks) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
-                ) {
+            // Item 1: metadata + description + play button
+            item {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "PLAY EPISODE",
+                        text = episode.displayTitle,
+                        style = androidx.compose.material3.MaterialTheme.typography.headlineLarge,
                         color = White,
-                        fontWeight = FontWeight.Bold,
                     )
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                HorizontalDivider(color = Border)
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Description
-                if (!episode.description.isNullOrBlank()) {
                     Text(
-                        text = episode.description,
+                        text = episode.pubDate ?: "",
                         color = TextSecondary,
                         fontSize = 14.sp,
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
 
-                // Tracklist header
-                if (uiState.tracks.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = { playerVm.playEpisode(episode, uiState.tracks) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                    ) {
+                        Text(
+                            text = "PLAY EPISODE",
+                            color = White,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    HorizontalDivider(color = Border)
+
+                    if (!episode.description.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = episode.description,
+                            color = TextSecondary,
+                            fontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+
+            if (uiState.tracks.isNotEmpty()) {
+                // Item 2: tracklist header
+                item {
                     Text(
                         text = "TRACKLIST",
                         color = AccentRed,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.1.sp,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                     )
+                }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Track rows
-                    uiState.tracks.forEach { track ->
-                        TrackRow(
-                            track = track,
-                            isActive = playerState.currentTrackPosition == track.position,
-                            isFavorite = track.position in uiState.favoritedPositions,
-                            onSeek = { playerVm.seekToTimestamp(track.timestamp) },
-                            onToggleFavorite = { detailVm.toggleFavorite(episodeId, track.position) },
-                        )
-                        HorizontalDivider(color = Border, thickness = 0.5.dp)
-                    }
+                // Items 3+: individual track rows
+                items(uiState.tracks) { track ->
+                    TrackRow(
+                        track = track,
+                        isActive = playerState.currentTrackPosition == track.position &&
+                                playerState.episode?.id == uiState.episode?.id,
+                        isFavorite = track.position in uiState.favoritedPositions,
+                        onSeek = {
+                            val episode = uiState.episode ?: return@TrackRow
+                            if (playerState.episode?.id == episode.id) {
+                                playerVm.seekToTimestamp(track.timestamp)
+                            } else {
+                                playerVm.playEpisodeFromTimestamp(episode, uiState.tracks, track.timestamp)
+                            }
+                        },
+                        onToggleFavorite = { detailVm.toggleFavorite(episodeId, track.position) },
+                    )
+                    HorizontalDivider(color = Border, thickness = 0.5.dp)
                 }
             }
         }

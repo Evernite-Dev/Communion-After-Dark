@@ -17,9 +17,9 @@ class CadRepository {
         withContext(Dispatchers.IO) { api.getYears() }
     }
 
-    suspend fun getEpisodes(year: Int? = null, audioOnly: Boolean = true): Result<List<Episode>> =
+    suspend fun getEpisodes(year: Int? = null, audioOnly: Boolean = true, limit: Int = 200): Result<List<Episode>> =
         runCatching {
-            withContext(Dispatchers.IO) { api.getEpisodes(year = year, audioOnly = audioOnly) }
+            withContext(Dispatchers.IO) { api.getEpisodes(year = year, audioOnly = audioOnly, limit = limit) }
         }
 
     suspend fun getEpisode(id: Int): Result<Episode> = runCatching {

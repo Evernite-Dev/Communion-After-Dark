@@ -55,9 +55,10 @@ import com.communionafterdark.cad.ui.viewmodel.PlaybackState
 
 private fun formatMs(ms: Long): String {
     val totalSec = ms / 1000L
-    val minutes = totalSec / 60
+    val hours = totalSec / 3600
+    val minutes = (totalSec % 3600) / 60
     val seconds = totalSec % 60
-    return "%d:%02d".format(minutes, seconds)
+    return "%d:%02d:%02d".format(hours, minutes, seconds)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

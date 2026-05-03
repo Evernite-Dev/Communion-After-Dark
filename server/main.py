@@ -99,7 +99,7 @@ def list_episodes(
         filters.append("e.year = ?")
         params.append(year)
     if audio_only:
-        filters.append("e.audio_status = 'done'")
+        filters.append("e.audio_status = 'done' AND e.audio_path IS NOT NULL")
 
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     params += [limit, offset]
@@ -314,6 +314,36 @@ def toggle_favorite(episode_id: int, position: int):
             row["audio_path"], row["artwork_path"],
         ))
         return {"favorited": True}
+
+
+# ---------------------------------------------------------------------------
+# New-episode poll  (consumed by Android NewEpisodeCheckWorker)
+# ---------------------------------------------------------------------------
+
+@app.get("/cad-new-episode/json")
+def new_episode_poll(since: int = 0):
+    """
+    Returns a JSON line with a "message" key if any episode with audio was
+    published after *since* (Unix timestamp).  Returns an empty body when
+    there is nothing new so the Android worker fires no notification.
+    """
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT title FROM episodes
+            WHERE pub_date > date(?, 'unixepoch')
+              AND audio_status = 'done'
+            ORDER BY pub_date DESC
+            LIMIT 1
+        """, (since,)).fetchone()
+
+    if not row:
+        return Response(content="", media_type="text/plain")
+
+    import json as _json
+    return Response(
+        content=_json.dumps({"message": f"New episode: {row['title']}"}),
+        media_type="application/json",
+    )
 
 
 # ---------------------------------------------------------------------------

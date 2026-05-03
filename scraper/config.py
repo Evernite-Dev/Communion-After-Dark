@@ -41,8 +41,13 @@ DB_PATH     = DATA_DIR / "cad_archive.db"
 # Network / rate-limiting
 # ---------------------------------------------------------------------------
 
-BASE_URL = "https://www.communionafterdark.com"
-RSS_URL  = "https://rss.buzzsprout.com/1609840.rss"
+BASE_URL         = "https://www.communionafterdark.com"
+RSS_URL          = "https://rss.buzzsprout.com/1609840.rss"
+MIXCLOUD_PROFILE = "CommunionAfterDark"
+
+# ntfy topic endpoint for push notifications. Set CAD_NTFY_URL in the cron
+# environment to enable. Leave unset to disable notifications silently.
+NTFY_URL = os.environ.get("CAD_NTFY_URL", "")
 
 # Seconds to wait between every HTTP request (page fetches AND downloads).
 # Increase this if you want to be even more conservative.
